@@ -115,6 +115,7 @@ class Creator implements CreatorInterface
 	    foreach ($data as $class => $instances) {
 		foreach ($instances as $name => $spec) {
 		    fwrite($stderr, "\rLoading object $name (". ++$xc ." / ". $xn .")");
+		    $names = [];
 		    if (preg_match('#\{([0-9]+)\.\.(\.?)([0-9]+)\}#i', $name, $match)) {
 			$from = $match[1];
 			$to = empty($match[2]) ? $match[3] : $match[3] - 1;
@@ -123,11 +124,21 @@ class Creator implements CreatorInterface
 			}
 			for ($i = $from; $i <= $to; $i++) {
 			    $this->currentRangeId = $i;
-			    $objects[] = $this->createObject($class, str_replace($match[0], $i, $name), $spec);
+			    $names[] = str_replace($match[0], $i, $name);
 			}
 			$this->currentRangeId = null;
 		    } else {
-			$objects[] = $this->createObject($class, $name, $spec);
+			$names[] = $name;
+		    }
+		    foreach ($names as $name) {
+			if ($this->forceReferences) {
+			    $objects[$name] = $this->createObject($class, $name, $spec, $objects[$name]);
+			} else {
+			    if (array_key_exists($name, $objects)) {
+				throw new \Exception("Object $name was defined more than once");
+			    }
+			    $objects[$name] = $this->createObject($class, $name, $spec);
+			}
 		    }
 		}
 	    }
@@ -145,7 +156,7 @@ class Creator implements CreatorInterface
 	}
 
 	fclose($stderr);
-        return $objects;
+        return array_values($objects);
     }
 
     /**
@@ -231,9 +242,9 @@ class Creator implements CreatorInterface
         return $this->generators[$locale];
     }
 
-    private function createObject($class, $name, $data)
+    private function createObject($class, $name, $data, $obj = null)
     {
-        $obj = $this->createInstance($class, $name, $data);
+	if ($obj == null) $obj = $this->createInstance($class, $name, $data);
 
         $variables = array();
         foreach ($data as $key => $val) {
