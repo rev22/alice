@@ -11,14 +11,9 @@
 
 namespace Nelmio\Alice;
 
-interface LoaderInterface
+interface CreatorInterface
 {
-    /**
-     * Loads a fixture file
-     *
-     * @param string $file filename
-     */
-    public function load($file);
+    public function create($objects);
 
     /**
      * Returns a reference to a fixture by name

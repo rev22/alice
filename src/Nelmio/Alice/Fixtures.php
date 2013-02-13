@@ -15,7 +15,7 @@ use Doctrine\Common\Persistence\ObjectManager;
 
 class Fixtures
 {
-    private static $loaders = array();
+    private static $readers = array();
 
     /**
      * Loads a fixture file into an object container
@@ -27,6 +27,8 @@ class Fixtures
      *                                - locale: the faker locale
      *                                - seed: a seed to make sure faker generates data consistently across
      *                                  runs, set to null to disable
+     *                                - clear: clears the tables for the objects before loading them
+     *                                - nophp: do not allow php in yaml files
      */
     public static function load($files, $container, array $options = array())
     {
@@ -34,6 +36,8 @@ class Fixtures
             'locale' => 'en_US',
             'providers' => array(),
             'seed' => 1,
+	    'clear' => false,
+	    'nophp' => false
         );
         $options = array_merge($defaults, $options);
 
@@ -56,30 +60,52 @@ class Fixtures
         $objects = array();
         foreach ($files as $file) {
             if (is_string($file) && preg_match('{\.ya?ml(\.php)?$}', $file)) {
-                $loader = self::getLoader('Yaml', $options);
+                $reader = self::getReader('Yaml', $options);
             } elseif ((is_string($file) && preg_match('{\.php$}', $file)) || is_array($file)) {
-                $loader = self::getLoader('Base', $options);
+                $reader = self::getReader('Base', $options);
             } else {
                 throw new \InvalidArgumentException('Unknown file/data type: '.gettype($file).' ('.json_encode($file).')');
             }
 
-            $loader->setORM($persister);
-            $set = $loader->load($file);
-            $persister->persist($set);
+            $l = $reader->readFixtures($file, array('nophp' => $options['nophp']));
 
-            $objects = array_merge($objects, $set);
+	    foreach ($l as $class => $instances) {
+		foreach ($instances as $name => $spec) {
+		    if (array_key_exists($class, $objects)) {
+			if (array_key_exists($name, $objects[$class])) {
+			    throw new \Exception("$file: object $name already defined");
+			}
+		    } else {
+			$objects[$class] = array();
+		    }
+		    $objects[$class][$name] = $spec;
+		}
+	    }
         }
 
+	$objects = (new \Nelmio\Alice\Loader\Creator($persister))->create($objects);
+
+        if ($options["clear"]) {
+            $classes;
+            foreach ($objects as $object) { $classes[get_class($object)] = 1; };
+            // $output->writeln('Deleting current database objects for classes: ' . implode(', ', array_keys($classes)));
+            foreach (array_keys($classes) as $class) {
+                // $manager->createQueryBuilder()->delete(array('u'))->from($class, 'u')->getQuery()->getResults();
+                $container->createQueryBuilder()->delete($class)->getQuery()->execute();
+            }
+            // $manager->flush();
+        }
+        
         return $objects;
     }
 
-    private static function getLoader($class, $options)
+    private static function getReader($class, $options)
     {
-        if (!isset(self::$loaders[$class])) {
+        if (!isset(self::$readers[$class])) {
             $fqcn = 'Nelmio\Alice\Loader\\'.$class;
-            self::$loaders[$class] = new $fqcn($options['locale'], $options['providers'], $options['seed']);
+            self::$readers[$class] = new $fqcn($options['locale'], $options['providers'], $options['seed']);
         }
 
-        return self::$loaders[$class];
+        return self::$readers[$class];
     }
 }

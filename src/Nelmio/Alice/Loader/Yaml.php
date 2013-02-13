@@ -33,8 +33,15 @@ class Yaml extends Base
     /**
      * {@inheritDoc}
      */
-    public function load($file)
+    public function readFixtures($file, $nophp = false)
     {
+	if ($nophp) {
+	    file_put_contents("/dev/stderr", "Loading YAML fixture files...\n");
+	    $yaml = file_get_contents($file);
+            return YamlParser::parse($yaml);
+	    // return $data;
+	}
+
         ob_start();
         $loader = $this;
         $includeWrapper = function () use ($file, $loader) {
@@ -51,6 +58,6 @@ class Yaml extends Base
             throw new \UnexpectedValueException('Yaml files must parse to an array of data');
         }
 
-        return parent::load($data);
+        return $data;
     }
 }
