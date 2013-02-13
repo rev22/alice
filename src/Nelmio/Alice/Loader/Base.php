@@ -69,6 +69,16 @@ class Base implements LoaderInterface
     private $currentRangeId;
 
     /**
+     *  @var bool
+     */
+    private $missing_references;
+
+    /**
+     * @var bool
+     */
+    private $force_references;
+
+    /**
      * @param string $locale default locale to use with faker if none is
      *      specified in the expression
      * @param array $providers custom faker providers in addition to the default
@@ -91,6 +101,7 @@ class Base implements LoaderInterface
      */
     public function load($data)
     {
+	$stderr = fopen("php://stderr", "w");
         if (!is_array($data)) {
             // $loader is defined to give access to $loader->fake() in the included file's context
             $loader = $this;
@@ -102,6 +113,7 @@ class Base implements LoaderInterface
 
                 return $res;
             };
+	    fwrite($stderr, "Loading fixtures files...\n");
             $data = $includeWrapper();
             if (!is_array($data)) {
                 throw new \UnexpectedValueException('Included file "'.$filename.'" must return an array of data');
@@ -110,32 +122,53 @@ class Base implements LoaderInterface
 
         $objects = array();
 
-        foreach ($data as $class => $instances) {
-            foreach ($instances as $name => $spec) {
-                if (preg_match('#\{([0-9]+)\.\.(\.?)([0-9]+)\}#i', $name, $match)) {
-                    $from = $match[1];
-                    $to = empty($match[2]) ? $match[3] : $match[3] - 1;
-                    if ($from > $to) {
-                        list($to, $from) = array($from, $to);
-                    }
-                    for ($i = $from; $i <= $to; $i++) {
-                        $this->currentRangeId = $i;
-                        $objects[] = $this->createObject($class, str_replace($match[0], $i, $name), $spec);
-                    }
-                    $this->currentRangeId = null;
-                } else {
-                    $objects[] = $this->createObject($class, $name, $spec);
-                }
-            }
-        }
+	$continue = true;
+	$this->forceReferences = false;
+	
+	while ($continue) {
+	    $this->missingReferences = false;
+	    $xn = 0; foreach ($data as $class => $instances) { $xn += count($instances); }
+	    $xc = 0;
+	    foreach ($data as $class => $instances) {
+		foreach ($instances as $name => $spec) {
+		    fwrite($stderr, "\rLoading object $name (". ++$xc ." / ". $xn .")");
+		    if (preg_match('#\{([0-9]+)\.\.(\.?)([0-9]+)\}#i', $name, $match)) {
+			$from = $match[1];
+			$to = empty($match[2]) ? $match[3] : $match[3] - 1;
+			if ($from > $to) {
+			    list($to, $from) = array($from, $to);
+			}
+			for ($i = $from; $i <= $to; $i++) {
+			    $this->currentRangeId = $i;
+			    $objects[] = $this->createObject($class, str_replace($match[0], $i, $name), $spec);
+			}
+			$this->currentRangeId = null;
+		    } else {
+			$objects[] = $this->createObject($class, $name, $spec);
+		    }
+		}
+	    }
+	    fwrite($stderr, "Loading objects...done.           \n");
+	    $continue = false;
+	    if ($this->missingReferences) {
+		if ($this->forceReferences) {
+		    throw new \Exception("missing references could not be resolved");
+		} else {
+		    fwrite($stderr, print "A second pass is needed to set up cyclic and back references.\n");
+		    $this->forceReferences = true;
+		    $continue = true;
+		}
+	    }
+	}
 
+	fclose($stderr);
         return $objects;
     }
 
     /**
      * {@inheritDoc}
      */
-    public function getReference($name, $property = null)
+    public function getReference($name, $property = null, $noerror = false)
     {
         if (isset($this->references[$name])) {
             $reference = $this->references[$name];
@@ -160,7 +193,12 @@ class Base implements LoaderInterface
             return $this->references[$name];
         }
 
-        throw new \UnexpectedValueException('Reference '.$name.' is not defined');
+	if ($noerror && !$this->forceReferences) {
+	    $this->missingReferences = true;
+	    return null;
+	} else {
+	    throw new \UnexpectedValueException('Reference '.$name.' is not defined');
+	}
     }
 
     /**
@@ -236,15 +274,17 @@ class Base implements LoaderInterface
                 call_user_func_array(array($obj, $key), $val);
                 $variables[$key] = $val;
             } elseif (method_exists($obj, 'set'.$key)) {
-                $val = $this->checkTypeHints($obj, 'set'.$key, $val);
-                $obj->{'set'.$key}($val);
-                $variables[$key] = $val;
-            } elseif (property_exists($obj, $key)) {
-                $refl = new \ReflectionProperty($obj, $key);
-                $refl->setAccessible(true);
-                $refl->setValue($obj, $val);
-
-                $variables[$key] = $val;
+		if ($val !== null) {
+		    $val = $this->checkTypeHints($obj, 'set'.$key, $val);
+		    $obj->{'set'.$key}($val);
+		    $variables[$key] = $val;
+		}
+            } elseif ($val !== null && property_exists($obj, $key)) {
+		$refl = new \ReflectionProperty($obj, $key);
+		$refl->setAccessible(true);
+		$refl->setValue($obj, $val);
+		    
+		$variables[$key] = $val;
             } else {
                 throw new \UnexpectedValueException('Could not determine how to assign '.$key.' to a '.$class.' object');
             }
@@ -432,7 +472,7 @@ class Base implements LoaderInterface
                 if (null !== $multi) {
                     throw new \UnexpectedValueException('To use multiple references you must use a mask like "'.$matches['multi'].'x @user*", otherwise you would always get only one item.');
                 }
-                $data = $this->getReference($matches['reference'], $property);
+                $data = $this->getReference($matches['reference'], $property, true);
             }
         }
 

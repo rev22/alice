@@ -43,6 +43,7 @@ class Yaml extends Base
         $data = $includeWrapper();
         if (true !== $data) {
             $yaml = ob_get_clean();
+	    file_put_contents("/dev/stderr", "Loading YAML fixture files...\n");
             $data = YamlParser::parse($yaml);
         }
 
